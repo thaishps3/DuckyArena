@@ -231,18 +231,19 @@
         <!-- 4 Key Individual Stats -->
         <div class="player-stats-grid-4">
             <div class="player-stat-tile">
-                <div class="stat-tile-label">DuckyCoins Ganadas</div>
-                <div class="stat-tile-number color-score">🪙 {{ player_entry.score }} DC</div>
+                <div class="stat-tile-label">Puntos</div>
+                <div class="stat-tile-number color-score">⭐ {{ player_entry.score }} pts</div>
             </div>
 
             <div class="player-stat-tile">
                 <div class="stat-tile-label">Aciertos</div>
                 <div class="stat-tile-number color-correct">{{ player_entry.correct_answers }} / {{ total_questions }}</div>
+                <div class="stat-tile-label">Incorrectas: {{ incorrect_answers }}</div>
             </div>
 
             <div class="player-stat-tile">
-                <div class="stat-tile-label">Racha Final</div>
-                <div class="stat-tile-number color-streak">🔥 {{ player_entry.current_streak }}</div>
+                <div class="stat-tile-label">Mejor Racha</div>
+                <div class="stat-tile-number color-streak">🔥 {{ best_streak }}</div>
             </div>
 
             <div class="player-stat-tile">

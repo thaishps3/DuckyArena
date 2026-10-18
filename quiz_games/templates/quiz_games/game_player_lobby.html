@@ -652,6 +652,9 @@
                 const data = JSON.parse(e.data);
                 if (data.event === 'game_started' || data.type === 'game_started') {
                     window.location.href = "{% url 'quiz_games:game_player_play' game.code %}";
+                } else if (data.event === 'game_cancelled' || data.type === 'game_cancelled') {
+                    // Se recarga el lobby: el servidor ve CANCELLED, deja el aviso y manda a unirse
+                    window.location.href = "{% url 'quiz_games:game_player_lobby' game.code %}";
                 }
             } catch(err) {}
         };
@@ -782,7 +785,7 @@
     (function() {
         const checkStatusUrl = "{% url 'quiz_games:game_lobby_status' game.code %}";
         const playerPlayUrl = "{% url 'quiz_games:game_player_play' game.code %}";
-        const joinUrl = "{% url 'quiz_games:game_join' %}";
+        const lobbyUrl = "{% url 'quiz_games:game_player_lobby' game.code %}";
 
         let lastPlayerLobbyEtag = null;
 
@@ -807,8 +810,8 @@
                     window.location.href = playerPlayUrl;
                 } else if (data.status === 'FINISHED' || data.status === 'CANCELLED') {
                     clearInterval(intervalId);
-                    alert('La partida ha concluido o fue cancelada por el anfitrión.');
-                    window.location.href = joinUrl;
+                    // Se recarga el lobby: el servidor decide el aviso (cancelada o finalizada)
+                    window.location.href = lobbyUrl;
                 }
             })
             .catch(function(err) {

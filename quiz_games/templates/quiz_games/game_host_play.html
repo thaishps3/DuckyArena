@@ -587,9 +587,11 @@
                         📊 Ver Distribución de Respuestas
                     </button>
 
-                    <form action="{% url 'quiz_games:host_finish_game' game.code %}" method="POST" style="display: inline;">
+                    <form action="{% url 'quiz_games:host_finish_game' game.code %}" method="POST" style="display: inline;"
+                          data-confirm="¿Seguro que deseas finalizar la partida ahora?"
+                          data-confirm-danger="1" data-confirm-ok="Sí, finalizar">
                         {% csrf_token %}
-                        <button type="submit" class="btn-3d btn-3d-red" style="padding: 0.6rem 1.15rem;" onclick="return confirm('¿Seguro que deseas finalizar la partida ahora?');">
+                        <button type="submit" class="btn-3d btn-3d-red" style="padding: 0.6rem 1.15rem;">
                             🏁 Finalizar Partida
                         </button>
                     </form>
@@ -608,7 +610,7 @@
         <!-- Desktop Top 5 Sidebar -->
         <aside class="host-top-sidebar">
             <div class="host-sidebar-title">
-                <span>🏆 Top 5 DuckyCoins</span>
+                <span>🏆 Top 5 Puntos</span>
             </div>
             <ul class="host-top-list" id="host-top-list">
                 {% for p in top_players %}
@@ -620,7 +622,7 @@
                             {% render_ducky_avatar p size="34px" extra_class="top-duck-icon" %}
                             <span class="host-top-name" title="{{ p.player.username }}">{{ p.player.username }}</span>
                         </div>
-                        <span class="host-top-score">{{ p.score }} DC</span>
+                        <span class="host-top-score">{{ p.score }} pts</span>
                     </li>
                 {% empty %}
                     <li class="host-top-item empty-state">
@@ -723,7 +725,7 @@
                         </span>
                         <span class="host-top-name" title="${item.username}">${item.username}</span>
                     </div>
-                    <span class="host-top-score">${item.score} DC</span>
+                    <span class="host-top-score">${item.score} pts</span>
                 </li>
             `;
         });
@@ -761,7 +763,7 @@
             })
             .catch(function(err) {
                 console.error('Error:', err);
-                alert('Hubo un error al avanzar la pregunta.');
+                window.duckyAlert('Hubo un error al avanzar la pregunta.');
                 if (btn) btn.disabled = false;
             });
         }

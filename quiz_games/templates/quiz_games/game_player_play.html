@@ -484,7 +484,7 @@
                     🔥 <span id="streak-count">{{ player_entry.current_streak }}</span>
                 </span>
                 <span class="score-badge">
-                    🪙 <span id="total-score">{{ player_entry.score }}</span> DC
+                    ⭐ <span id="total-score">{{ player_entry.score }}</span> pts
                 </span>
             </div>
             <span class="q-number-indicator">
@@ -545,7 +545,7 @@
                         </span>
                     </div>
                     <span class="ranking-score-pill">
-                        <span class="player-score-val">{{ p.score }}</span> DC
+                        <span class="player-score-val">{{ p.score }}</span> pts
                     </span>
                 </li>
             {% empty %}
@@ -563,8 +563,8 @@
             <span class="dock-stat-value">🔥 <span id="dock-streak-count">{{ player_entry.current_streak }}</span></span>
         </div>
         <div class="dock-stat-item">
-            <span class="dock-stat-label">DuckyCoins</span>
-            <span class="dock-stat-value highlight-coins">🪙 <span id="mobile-score">{{ player_entry.score }}</span> DC</span>
+            <span class="dock-stat-label">Puntos</span>
+            <span class="dock-stat-value highlight-coins">⭐ <span id="mobile-score">{{ player_entry.score }}</span> pts</span>
         </div>
         <div class="dock-stat-item">
             <span class="dock-stat-label">Posición</span>
@@ -581,18 +581,18 @@
                         {% if existing_answer.is_correct %}¡CORRECTO! 🎉{% else %}¡INCORRECTO! ❌{% endif %}
                     </div>
                     <div class="feedback-points-gained">
-                        +{{ existing_answer.points_awarded }} DC
+                        +{{ existing_answer.points_awarded }} pts
                     </div>
                 </div>
             {% else %}
                 <div class="feedback-banner" id="overlay-banner">
                     <div class="feedback-title" id="overlay-title">¡Respuesta Enviada!</div>
-                    <div class="feedback-points-gained" id="overlay-points">+<span id="points-gained">0</span> DC</div>
+                    <div class="feedback-points-gained" id="overlay-points">+<span id="points-gained">0</span> pts</div>
                 </div>
             {% endif %}
 
             <p class="feedback-subinfo" id="overlay-streak-info">
-                Saldo acumulado: <strong><span id="overlay-total-score">{{ player_entry.score }}</span> DC</strong>
+                Total acumulado: <strong><span id="overlay-total-score">{{ player_entry.score }}</span> pts</strong>
             </p>
 
             <div class="pulse-waiting-box">
@@ -660,6 +660,11 @@
 
             // A. Resultado individual de respuesta
             if (data.type === 'answer_result') {
+                // Si el servidor rechazó la respuesta (error) o ya estaba registrada,
+                // no es una respuesta incorrecta: no mostramos feedback ni tocamos el marcador.
+                if (data.error || data.already_answered) {
+                    return;
+                }
                 if (window.duckyAudio) {
                     if (data.is_correct) {
                         window.duckyAudio.playCorrect();
@@ -695,7 +700,7 @@
 
                 if (overlayTotalScore) overlayTotalScore.innerText = data.total_score;
                 if (overlayStreakInfo) {
-                    overlayStreakInfo.innerHTML = `Saldo acumulado: <strong>${data.total_score} DC</strong> &bull; Racha: <strong>🔥 ${data.streak}</strong>`;
+                    overlayStreakInfo.innerHTML = `Total acumulado: <strong>${data.total_score} pts</strong> &bull; Racha: <strong>🔥 ${data.streak}</strong>`;
                 }
 
                 if (overlay) overlay.style.display = 'flex';
@@ -741,7 +746,7 @@
                                 </span>
                             </div>
                             <span class="ranking-score-pill">
-                                <span class="player-score-val">${item.score}</span> DC
+                                <span class="player-score-val">${item.score}</span> pts
                             </span>
                         </li>
                     `;

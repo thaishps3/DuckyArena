@@ -47,7 +47,7 @@ class QuizForm(forms.ModelForm):
 class QuestionForm(forms.ModelForm):
     class Meta:
         model = Question
-        fields = ['text', 'time_limit', 'points', 'order']
+        fields = ['text', 'time_limit', 'points', 'order', 'difficulty']
         widgets = {
             'text': forms.Textarea(attrs={
                 'class': 'ducky-textarea form-control',
@@ -69,7 +69,18 @@ class QuestionForm(forms.ModelForm):
                 'class': 'ducky-input form-control',
                 'min': 1,
             }),
+            'difficulty': forms.Select(attrs={
+                'class': 'ducky-input form-control',
+            }),
         }
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        # Opcional: si no se envía, la pregunta queda como "fácil" (compatibilidad con formularios anteriores)
+        self.fields['difficulty'].required = False
+
+    def clean_difficulty(self):
+        return self.cleaned_data.get('difficulty') or Question.Difficulty.FACIL
 
     def clean_time_limit(self):
         time_limit = self.cleaned_data.get('time_limit')

@@ -672,6 +672,82 @@
             }
         });
     </script>
+    <!-- Cuadro de diálogo propio (reemplaza alert/confirm del navegador) -->
+    <div id="ducky-dialog" class="ducky-dialog-backdrop" hidden>
+        <div class="ducky-dialog-box" role="dialog" aria-modal="true" aria-labelledby="ducky-dialog-msg">
+            <p id="ducky-dialog-msg" class="ducky-dialog-msg"></p>
+            <div class="ducky-dialog-actions">
+                <button type="button" id="ducky-dialog-cancel" class="btn-3d btn-3d-gray" style="padding: 0.55rem 1.2rem;">Volver</button>
+                <button type="button" id="ducky-dialog-ok" class="btn-3d btn-3d-blue" style="padding: 0.55rem 1.2rem;">Aceptar</button>
+            </div>
+        </div>
+    </div>
+    <style>
+        .ducky-dialog-backdrop {
+            position: fixed; inset: 0; z-index: 10000;
+            background: rgba(15, 23, 42, 0.6);
+            display: flex; align-items: center; justify-content: center; padding: 1rem;
+        }
+        .ducky-dialog-backdrop[hidden] { display: none; }
+        .ducky-dialog-box {
+            background: #FFFFFF; color: var(--text-heading);
+            border-radius: 16px; padding: 1.75rem; width: 100%; max-width: 420px;
+            box-shadow: 0 20px 50px rgba(0, 0, 0, 0.35);
+        }
+        .ducky-dialog-msg { font-size: 1.05rem; font-weight: 700; line-height: 1.5; margin: 0 0 1.5rem; }
+        .ducky-dialog-actions { display: flex; gap: 0.75rem; justify-content: flex-end; flex-wrap: wrap; }
+        .btn-3d-gray { background-color: #94A3B8; box-shadow: 0 4px 0 #64748B; color: #FFFFFF; }
+        .btn-3d-gray:hover { background-color: #8493A8; }
+    </style>
+    <script>
+        (function() {
+            const box = document.getElementById('ducky-dialog');
+            const msgEl = document.getElementById('ducky-dialog-msg');
+            const okBtn = document.getElementById('ducky-dialog-ok');
+            const cancelBtn = document.getElementById('ducky-dialog-cancel');
+            let resolver = null;
+
+            function open(message, opts) {
+                opts = opts || {};
+                return new Promise(function(resolve) {
+                    resolver = resolve;
+                    msgEl.textContent = message;
+                    okBtn.textContent = opts.okText || 'Aceptar';
+                    okBtn.className = 'btn-3d ' + (opts.danger ? 'btn-3d-red' : 'btn-3d-blue');
+                    cancelBtn.style.display = opts.alertOnly ? 'none' : '';
+                    box.hidden = false;
+                    okBtn.focus();
+                });
+            }
+            function close(result) {
+                box.hidden = true;
+                if (resolver) { const r = resolver; resolver = null; r(result); }
+            }
+            okBtn.addEventListener('click', function() { close(true); });
+            cancelBtn.addEventListener('click', function() { close(false); });
+            document.addEventListener('keydown', function(e) {
+                if (!box.hidden && e.key === 'Escape') close(false);
+            });
+
+            // window.duckyConfirm(mensaje) -> Promise<boolean> ; window.duckyAlert(mensaje) -> Promise
+            window.duckyConfirm = function(message, opts) { return open(message, opts); };
+            window.duckyAlert = function(message) { return open(message, { alertOnly: true }); };
+
+            // Cualquier formulario con data-confirm pide confirmación en este cuadro
+            document.addEventListener('submit', function(e) {
+                const form = e.target;
+                if (!form.matches || !form.matches('form[data-confirm]') || form.dataset.confirmed === '1') return;
+                e.preventDefault();
+                window.duckyConfirm(form.dataset.confirm, {
+                    danger: form.dataset.confirmDanger === '1',
+                    okText: form.dataset.confirmOk || 'Aceptar'
+                }).then(function(ok) {
+                    if (ok) { form.dataset.confirmed = '1'; form.submit(); }
+                });
+            });
+        })();
+    </script>
+
     {% block extra_js %}{% endblock %}
 </body>
 </html>

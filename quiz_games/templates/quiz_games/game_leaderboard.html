@@ -229,8 +229,8 @@
     <!-- Global Session Metrics -->
     <div class="global-stats-row">
         <div class="stat-display-box stat-edge-yellow">
-            <div class="stat-box-label">🪙 DuckyCoins Máximas</div>
-            <div class="stat-box-number">{{ max_score }} DC</div>
+            <div class="stat-box-label">⭐ Puntos Máximos</div>
+            <div class="stat-box-number">{{ max_score }} pts</div>
         </div>
 
         <div class="stat-display-box stat-edge-blue">
@@ -260,7 +260,7 @@
                         <th>Participante</th>
                         <th>Aciertos</th>
                         <th>Racha Máx.</th>
-                        <th>DuckyCoins Ganadas</th>
+                        <th>Puntos</th>
                     </tr>
                 </thead>
                 <tbody>
@@ -278,8 +278,8 @@
                                 </div>
                             </td>
                             <td><strong>{{ gp.correct_answers }}</strong> / {{ total_questions }}</td>
-                            <td>🔥 {{ gp.current_streak }}</td>
-                            <td class="score-highlight">🪙 {{ gp.score }} DC</td>
+                            <td>🔥 {{ gp.best_streak }}</td>
+                            <td class="score-highlight">⭐ {{ gp.score }} pts</td>
                         </tr>
                     {% empty %}
                         <tr>

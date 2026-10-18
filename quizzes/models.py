@@ -25,6 +25,14 @@ class Quiz(models.Model):
 
 
 class Question(models.Model):
+    class Difficulty(models.TextChoices):
+        # Los 4 valores y sus claves son los que espera el Ecomotor (DAR_formulas.pdf):
+        # facil x1.00, media x1.25, dificil x1.50, experto x2.00 (multiplicador de XP).
+        FACIL = 'facil', 'Fácil'
+        MEDIA = 'media', 'Media'
+        DIFICIL = 'dificil', 'Difícil'
+        EXPERTO = 'experto', 'Experto'
+
     quiz = models.ForeignKey(
         Quiz,
         on_delete=models.CASCADE,
@@ -35,6 +43,13 @@ class Question(models.Model):
     time_limit = models.PositiveIntegerField(default=30, verbose_name="Tiempo límite (s)")
     points = models.PositiveIntegerField(default=1000, verbose_name="Puntos base")
     order = models.PositiveIntegerField(default=1, verbose_name="Orden")
+    # Solo se guarda y se informa al Ecomotor; NO cambia la puntuación (score) de la partida.
+    difficulty = models.CharField(
+        max_length=10,
+        choices=Difficulty.choices,
+        default=Difficulty.FACIL,
+        verbose_name="Dificultad",
+    )
 
     class Meta:
         verbose_name = "Pregunta"

@@ -127,6 +127,11 @@ class PlayerAnswer(models.Model):
     )
     is_correct = models.BooleanField(verbose_name="¿Fue correcta?")
     points_awarded = models.PositiveIntegerField(default=0, verbose_name="Puntos otorgados")
+    response_time = models.FloatField(
+        null=True, blank=True,
+        verbose_name="Tiempo de respuesta (s)",
+        help_text="Segundos desde que se mostró la pregunta hasta la respuesta, medidos en el servidor."
+    )
     answered_at = models.DateTimeField(auto_now_add=True, verbose_name="Respondido en")
 
     class Meta:

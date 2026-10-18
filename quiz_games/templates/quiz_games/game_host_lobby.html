@@ -460,9 +460,14 @@
         </div>
 
         <div style="display: flex; gap: 0.75rem; flex-wrap: wrap; align-items: center;">
-            <a href="{% url 'quizzes:quiz_detail' quiz.pk %}" class="btn-3d btn-3d-red" style="padding: 0.6rem 1.25rem;">
-                Cancelar Sala
-            </a>
+            <form action="{% url 'quiz_games:host_cancel_game' game.code %}" method="POST" style="display: inline;"
+                  data-confirm="¿Cancelar la sala? Los estudiantes que ya entraron serán sacados."
+                  data-confirm-danger="1" data-confirm-ok="Sí, cancelar sala">
+                {% csrf_token %}
+                <button type="submit" class="btn-3d btn-3d-red" style="padding: 0.6rem 1.25rem;">
+                    Cancelar Sala
+                </button>
+            </form>
 
             <form action="{% url 'quiz_games:host_start_game' game.code %}" method="POST" id="start-game-form" style="display: inline;">
                 {% csrf_token %}
@@ -488,17 +493,19 @@
         if (!pin) return;
 
         navigator.clipboard.writeText(pin).then(() => {
-            alert('Código PIN ' + pin + ' copiado al portapapeles.');
+            window.duckyAlert('Código PIN ' + pin + ' copiado al portapapeles.');
         }).catch(() => {
             prompt('Copia el código PIN:', pin);
         });
     }
 
     function kickPlayer(gameCode, playerId, username) {
-        if (!confirm('¿Estás seguro de que deseas expulsar a ' + (username || 'este participante') + '?')) {
-            return;
-        }
+        window.duckyConfirm('¿Estás seguro de que deseas expulsar a ' + (username || 'este participante') + '?',
+                            { danger: true, okText: 'Sí, expulsar' })
+            .then(function(ok) { if (ok) doKickPlayer(gameCode, playerId); });
+    }
 
+    function doKickPlayer(gameCode, playerId) {
         const kickUrl = '/games/host/' + gameCode + '/kick/' + playerId + '/';
         const csrfToken = document.querySelector('[name=csrfmiddlewaretoken]') ? document.querySelector('[name=csrfmiddlewaretoken]').value : '{{ csrf_token }}';
 
@@ -532,12 +539,12 @@
                     }
                 }
             } else {
-                alert(data.error || 'No se pudo expulsar al participante.');
+                window.duckyAlert(data.error || 'No se pudo expulsar al participante.');
             }
         })
         .catch(function(err) {
             console.error('Error al expulsar participante:', err);
-            alert('Error al expulsar participante.');
+            window.duckyAlert('Error al expulsar participante.');
         });
     }
 

@@ -32,6 +32,8 @@ class JoinGameForm(forms.Form):
                 raise ValidationError("Esta partida ya ha comenzado y no admite nuevos participantes.")
             elif game.status == Game.Status.FINISHED:
                 raise ValidationError("Esta partida ya ha finalizado.")
+            elif game.status == Game.Status.CANCELLED:
+                raise ValidationError("El docente canceló esta sala.")
             else:
                 raise ValidationError("Esta sala no está disponible.")
 

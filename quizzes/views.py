@@ -93,6 +93,16 @@ class QuizDetailView(LoginRequiredMixin, DetailView):
             raise PermissionDenied("Este cuestionario está en borrador y solo puede ser visto por su creador.")
         return quiz
 
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        user = self.request.user
+        # Solo el creador (o superusuario) ve las preguntas; el resto las descubre jugando
+        context['can_view_questions'] = (self.object.creator == user) or user.is_superuser
+        # Minutos estimados (se calcula aqui porque la plantilla no sabe dividir)
+        total_sec = self.object.total_time or 0
+        context['estimated_minutes'] = round(total_sec / 60)
+        return context
+
 
 class QuizFormsetMixin:
     """Provee soporte para la gestión transaccional de Quiz -> Question -> Answer."""

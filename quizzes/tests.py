@@ -126,6 +126,25 @@ class QuizFormValidationTest(TestCase):
         form_valid = QuestionForm(data={'text': '¿Pregunta válida?', 'time_limit': 45, 'points': 1200, 'order': 1})
         self.assertTrue(form_valid.is_valid())
 
+    def test_question_difficulty_defaults_to_facil(self):
+        # Sin enviar dificultad (formularios anteriores) la pregunta queda como "fácil"
+        form = QuestionForm(data={'text': '¿Pregunta válida?', 'time_limit': 45, 'points': 1200, 'order': 1})
+        self.assertTrue(form.is_valid())
+        self.assertEqual(form.cleaned_data['difficulty'], 'facil')
+        self.assertEqual(Question.objects.model._meta.get_field('difficulty').default, 'facil')
+
+    def test_question_difficulty_accepts_ecomotor_values_only(self):
+        # Los 4 valores exactos que espera el Ecomotor (DAR_formulas.pdf)
+        for value in ('facil', 'media', 'dificil', 'experto'):
+            form = QuestionForm(data={'text': '¿Pregunta válida?', 'time_limit': 45, 'points': 1200,
+                                      'order': 1, 'difficulty': value})
+            self.assertTrue(form.is_valid(), value)
+            self.assertEqual(form.cleaned_data['difficulty'], value)
+        invalid = QuestionForm(data={'text': '¿Pregunta válida?', 'time_limit': 45, 'points': 1200,
+                                     'order': 1, 'difficulty': 'imposible'})
+        self.assertFalse(invalid.is_valid())
+        self.assertIn('difficulty', invalid.errors)
+
 
 class AnswerFormSetPedagogicalTest(TestCase):
     def setUp(self):
@@ -260,6 +279,38 @@ class QuizViewsSecurityTest(TestCase):
         self.client.force_login(self.student)
         response = self.client.get(reverse('quizzes:quiz_detail', kwargs={'pk': self.quiz.pk}))
         self.assertEqual(response.status_code, 403)
+
+    def test_quiz_detail_shows_estimated_minutes_not_boolean(self):
+        # Fallo heredado: la plantilla mostraba "True min". Ahora muestra minutos reales.
+        from quizzes.models import Question
+        self.quiz.is_published = True
+        self.quiz.save()
+        Question.objects.all().filter(quiz=self.quiz).delete()
+        Question.objects.create(quiz=self.quiz, text='A', time_limit=90, points=100, order=1)
+        Question.objects.create(quiz=self.quiz, text='B', time_limit=90, points=100, order=2)
+        self.client.force_login(self.teacher_owner)
+        response = self.client.get(reverse('quizzes:quiz_detail', kwargs={'pk': self.quiz.pk}))
+        self.assertEqual(response.context['estimated_minutes'], 3)
+        self.assertContains(response, '3 min')
+        self.assertNotContains(response, 'True min')
+
+    def test_published_quiz_detail_hides_questions_from_students(self):
+        # Un alumno no debe ver preguntas ni opciones antes de jugar; el creador sí
+        self.quiz.is_published = True
+        self.quiz.save()
+        url = reverse('quizzes:quiz_detail', kwargs={'pk': self.quiz.pk})
+
+        self.client.force_login(self.student)
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, 200)
+        self.assertNotContains(response, '¿x + 2 = 5, cuánto vale x?')
+        self.assertContains(response, 'Las preguntas se revelan durante la partida.')
+
+        self.client.force_login(self.teacher_other)
+        self.assertNotContains(self.client.get(url), '¿x + 2 = 5, cuánto vale x?')
+
+        self.client.force_login(self.teacher_owner)
+        self.assertContains(self.client.get(url), '¿x + 2 = 5, cuánto vale x?')
 
     def test_quiz_update_and_delete_restricted_to_owner(self):
         # Intento de edición por otro profesor -> 403

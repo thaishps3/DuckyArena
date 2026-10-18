@@ -1,13 +1,5 @@
-import secrets
-
-
-def generate_unique_game_code():
-    """
-    Genera un código PIN de 6 dígitos numéricos asegurando unicidad absoluta
-    en la tabla Game para evitar violaciones de clave única.
-    """
-    from .models import Game
-    while True:
-        code = f"{secrets.randbelow(1000000):06d}"
-        if not Game.objects.filter(code=code).exists():
-            return code
+"""
+Compatibilidad: la lógica vive ahora en quiz_games/services.py.
+Este módulo solo reexporta los nombres antiguos para no romper importaciones existentes.
+"""
+from .services import generate_unique_game_code, get_current_question  # noqa: F401

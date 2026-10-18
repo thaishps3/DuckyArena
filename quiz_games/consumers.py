@@ -1,10 +1,9 @@
 import json
 from channels.generic.websocket import AsyncWebsocketConsumer
 from channels.db import database_sync_to_async
-from django.utils import timezone
 from django.db import transaction
+from . import services, identity
 from .models import Game, GamePlayer, PlayerAnswer
-from quizzes.models import Question, Answer
 
 
 class GameRoomConsumer(AsyncWebsocketConsumer):
@@ -13,7 +12,7 @@ class GameRoomConsumer(AsyncWebsocketConsumer):
         self.room_group_name = f"game_{self.code}"
         self.user = self.scope.get('user')
 
-        if self.user and self.user.is_authenticated:
+        if self.user and self.user.is_authenticated and await self.is_game_member(self.user, self.code):
             await self.channel_layer.group_add(self.room_group_name, self.channel_name)
             await self.accept()
             await self.send(text_data=json.dumps({
@@ -23,6 +22,14 @@ class GameRoomConsumer(AsyncWebsocketConsumer):
             }))
         else:
             await self.close()
+
+    @database_sync_to_async
+    def is_game_member(self, user, code):
+        """Solo el anfitrión o un jugador inscrito pueden entrar a la sala en tiempo real."""
+        game = Game.objects.filter(code=code).first()
+        if not game:
+            return False
+        return game.host_id == user.id or GamePlayer.objects.filter(game=game, player=user).exists()
 
     async def disconnect(self, close_code):
         if hasattr(self, 'room_group_name'):
@@ -83,62 +90,22 @@ class GameRoomConsumer(AsyncWebsocketConsumer):
 
     @database_sync_to_async
     def process_answer_db(self, user, code, question_id, selected_answer_id):
+        """Delega en services.submit_answer: mismas reglas que la vista HTTP."""
         game = Game.objects.filter(code=code).first()
-        if not game or game.status != Game.Status.RUNNING:
+        if not game:
             return {'error': 'Partida no disponible'}
 
-        with transaction.atomic():
-            player_entry = GamePlayer.objects.select_for_update().filter(game=game, player=user).first()
-            if not player_entry:
-                return {'error': 'Jugador no registrado'}
-
-            question = Question.objects.filter(pk=question_id, quiz=game.quiz).first()
-            selected_answer = Answer.objects.filter(pk=selected_answer_id, question=question).first()
-
-            if not question or not selected_answer:
-                return {'error': 'Pregunta o alternativa inválida'}
-
-            if PlayerAnswer.objects.filter(game_player=player_entry, question=question).exists():
-                return {'already_answered': True}
-
-            # Cálculo de tiempo en backend contra el inicio de la pregunta (Anti-cheat)
-            now = timezone.now()
-            start = game.question_started_at or game.started_at or now
-            server_time_taken = max(0.1, (now - start).total_seconds())
-            time_limit = float(question.time_limit)
-
-            is_correct = selected_answer.is_correct
-            ducky_coins_awarded = 0
-
-            # Solo asigna puntos si es correcta y respondió dentro del límite
-            if is_correct and server_time_taken <= (time_limit + 1.5):
-                player_entry.current_streak += 1
-                player_entry.correct_answers += 1
-                puntos_base = float(question.points)
-                factor_tiempo = max(0.5, 1.0 - (server_time_taken / time_limit)) if time_limit > 0 else 0.5
-                bono_racha = min(500, max(0, (player_entry.current_streak - 1) * 100))
-                ducky_coins_awarded = int((puntos_base * factor_tiempo) + bono_racha)
-                player_entry.score += ducky_coins_awarded
-            else:
-                player_entry.current_streak = 0
-
-            player_entry.save(update_fields=['score', 'correct_answers', 'current_streak'])
-
-            PlayerAnswer.objects.create(
-                game_player=player_entry,
-                question=question,
-                selected_answer=selected_answer,
-                is_correct=is_correct,
-                points_awarded=ducky_coins_awarded,
-                answered_at=now
-            )
-
-            return {
-                'is_correct': is_correct,
-                'ducky_coins_awarded': ducky_coins_awarded,
-                'total_score': player_entry.score,
-                'streak': player_entry.current_streak,
-            }
+        result = services.submit_answer(game, user, question_id, selected_answer_id)
+        if result.get('code') == 'already_answered':
+            return {'already_answered': True}
+        if 'error' in result:
+            return {'error': result['error']}
+        return {
+            'is_correct': result['is_correct'],
+            'ducky_coins_awarded': result['points_awarded'],
+            'total_score': result['total_score'],
+            'streak': result['streak'],
+        }
 
     async def handle_update_avatar(self, data):
         """Actualiza el avatar del jugador y lo transmite a toda la sala en tiempo real."""
@@ -194,7 +161,7 @@ class GameRoomConsumer(AsyncWebsocketConsumer):
         if not game:
             return {'ranking': [], 'answered_count': 0, 'total_players': 0}
 
-        ranking_qs = game.players.select_related('player').order_by('-score', '-correct_answers', 'joined_at')
+        ranking_qs = services.ranked_players(game)
         ranking_list = [
             {
                 'player_id': p.id,
@@ -206,13 +173,12 @@ class GameRoomConsumer(AsyncWebsocketConsumer):
             for p in ranking_qs
         ]
 
-        questions = list(game.quiz.questions.order_by('order'))
-        current_idx = game.current_question - 1
+        current_question = services.get_current_question(game)
         answered_count = 0
-        if 0 <= current_idx < len(questions):
+        if current_question is not None:
             answered_count = PlayerAnswer.objects.filter(
                 game_player__game=game,
-                question=questions[current_idx]
+                question=current_question
             ).count()
 
         return {
@@ -239,30 +205,9 @@ class GameRoomConsumer(AsyncWebsocketConsumer):
     @database_sync_to_async
     def advance_question_db(self, code, user):
         game = Game.objects.filter(code=code).first()
-        if not game or game.host != user:
+        if not game or not identity.is_host(game, user):
             return {'success': False, 'error': 'No autorizado'}
-
-        total_questions = game.quiz.questions.count()
-        with transaction.atomic():
-            if game.current_question < total_questions:
-                game.current_question += 1
-                game.question_started_at = timezone.now()
-                game.save(update_fields=['current_question', 'question_started_at'])
-                return {
-                    'success': True,
-                    'event': 'next_question',
-                    'current_question': game.current_question,
-                    'total_questions': total_questions
-                }
-            else:
-                game.status = Game.Status.FINISHED
-                game.finished_at = timezone.now()
-                game.save(update_fields=['status', 'finished_at'])
-                return {
-                    'success': True,
-                    'event': 'game_finished',
-                    'leaderboard_url': f"/games/leaderboard/{game.code}/"
-                }
+        return services.advance_game(game)
 
     async def handle_host_start_game(self):
         """Inicia la partida desde el Lobby vía WebSocket."""
@@ -282,23 +227,9 @@ class GameRoomConsumer(AsyncWebsocketConsumer):
     @database_sync_to_async
     def start_game_db(self, code, user):
         game = Game.objects.filter(code=code).first()
-        if not game or game.host != user:
+        if not game or not identity.is_host(game, user):
             return {'success': False, 'error': 'No autorizado'}
-
-        if game.status == Game.Status.LOBBY:
-            with transaction.atomic():
-                now = timezone.now()
-                game.status = Game.Status.RUNNING
-                game.started_at = now
-                game.question_started_at = now
-                game.current_question = 1
-                game.save(update_fields=['status', 'started_at', 'question_started_at', 'current_question'])
-            return {
-                'success': True,
-                'event': 'game_started',
-                'current_question': 1
-            }
-        return {'success': False, 'error': 'Estado no válido'}
+        return services.start_game(game)
 
     async def broadcast_payload(self, event):
         await self.send(text_data=json.dumps(event['payload']))

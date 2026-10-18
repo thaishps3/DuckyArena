@@ -40,8 +40,8 @@ class GamePlayerAdmin(admin.ModelAdmin):
 
 @admin.register(PlayerAnswer)
 class PlayerAnswerAdmin(admin.ModelAdmin):
-    list_display = ('game_player', 'question', 'selected_answer', 'is_correct', 'points_awarded', 'answered_at')
+    list_display = ('game_player', 'question', 'selected_answer', 'is_correct', 'points_awarded', 'response_time', 'answered_at')
     list_filter = ('is_correct', 'answered_at')
     search_fields = ('game_player__player__username', 'question__text')
     list_select_related = ('game_player__player', 'question', 'selected_answer')
-    readonly_fields = ('game_player', 'question', 'selected_answer', 'is_correct', 'points_awarded', 'answered_at')
+    readonly_fields = ('game_player', 'question', 'selected_answer', 'is_correct', 'points_awarded', 'response_time', 'answered_at')

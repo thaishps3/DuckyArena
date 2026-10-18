@@ -8,12 +8,12 @@ from django.contrib import messages
 from django.db import transaction
 from django.db.models import Avg, Max, Count
 from django.http import JsonResponse, HttpResponseForbidden, HttpResponse, HttpResponseNotModified
-from django.utils import timezone
 from django.views.decorators.http import require_POST
-from quizzes.models import Quiz, Question, Answer
+from quizzes.models import Quiz
 from .models import Game, GamePlayer, PlayerAnswer
 from .forms import JoinGameForm
-from .utils import generate_unique_game_code
+from . import services, identity
+from .services import generate_unique_game_code, ranked_players
 
 
 @login_required
@@ -24,13 +24,12 @@ def game_create(request, quiz_pk):
     Garantiza atómicamente la asignación del anfitrión y el PIN sin colisión.
     """
     user = request.user
-    is_teacher = user.is_superuser or user.is_staff or (hasattr(user, 'profile') and getattr(user.profile, 'role', None) == 'TEACHER')
-    if not is_teacher:
+    if not identity.is_teacher(user):
         raise PermissionDenied("Solo los usuarios con rol de PROFESOR pueden iniciar salas de juego.")
 
     quiz = get_object_or_404(Quiz, pk=quiz_pk)
 
-    if quiz.creator != user and not (user.is_superuser or user.is_staff):
+    if not identity.can_create_game(user, quiz):
         raise PermissionDenied("Solo el profesor creador del cuestionario puede iniciar la partida.")
 
     if not quiz.is_published:
@@ -59,7 +58,7 @@ def game_create(request, quiz_pk):
 def game_host_lobby(request, code):
     """Panel interactivo del profesor mientras se unen los estudiantes."""
     game = get_object_or_404(Game.objects.select_related('quiz', 'host'), code=code)
-    if game.host != request.user:
+    if not identity.is_host(game, request.user):
         raise PermissionDenied("Acceso exclusivo para el anfitrión de la sala.")
 
     players = game.players.select_related('player').order_by('joined_at')
@@ -76,7 +75,7 @@ def game_host_lobby(request, code):
 def host_kick_player(request, code, player_id):
     """Permite al anfitrión expulsar a un participante no deseado en fase de Lobby."""
     game = get_object_or_404(Game, code=code)
-    if game.host != request.user:
+    if not identity.is_host(game, request.user):
         raise PermissionDenied("Solo el anfitrión puede expulsar participantes.")
     if game.status != Game.Status.LOBBY:
         return JsonResponse({'success': False, 'error': 'Solo se puede expulsar en fase de Lobby.'}, status=400)
@@ -99,7 +98,7 @@ def game_lobby_status(request, code):
     user = request.user
 
     # Verificación de pertenencia a la partida
-    is_host = (game.host == user)
+    is_host = identity.is_host(game, user)
     is_player = game.players.filter(player=user).exists()
     if not (is_host or is_player):
         return HttpResponseForbidden("No perteneces a esta partida.")
@@ -190,30 +189,19 @@ def host_start_game(request, code):
     """
     game = get_object_or_404(Game, code=code)
 
-    if game.host != request.user:
+    if not identity.is_host(game, request.user):
         raise PermissionDenied("Solo el anfitrión puede iniciar la partida.")
 
     if game.status != Game.Status.LOBBY:
         messages.warning(request, f"La partida ya no está en espera (Estado actual: {game.get_status_display()}).")
         return redirect('quiz_games:game_host_play', code=game.code)
 
-    if not game.players.exists():
-        messages.error(request, "No puedes iniciar la partida sin jugadores en la sala.")
+    result = services.start_game(game)
+    if not result['success']:
+        messages.error(request, result['error'])
         return redirect('quiz_games:game_host_lobby', code=game.code)
 
-    questions_count = game.quiz.questions.count()
-    if questions_count == 0:
-        messages.error(request, "El cuestionario no contiene preguntas para jugar.")
-        return redirect('quiz_games:game_host_lobby', code=game.code)
-
-    with transaction.atomic():
-        now = timezone.now()
-        game.status = Game.Status.RUNNING
-        game.started_at = now
-        game.question_started_at = now
-        game.current_question = 1
-        game.save(update_fields=['status', 'started_at', 'question_started_at', 'current_question'])
-
+    services.broadcast_to_room(game.code, result)
     messages.success(request, "¡La partida ha comenzado!")
     return redirect('quiz_games:game_host_play', code=game.code)
 
@@ -231,34 +219,28 @@ def host_next_question(request, code):
     """
     game = get_object_or_404(Game, code=code)
 
-    if game.host != request.user:
+    if not identity.is_host(game, request.user):
         raise PermissionDenied("Solo el anfitrión puede avanzar de pregunta.")
 
-    if game.status != Game.Status.RUNNING:
-        return JsonResponse({'success': False, 'error': 'La partida no está en curso.'}, status=400)
+    result = services.advance_game(game)
+    if not result['success']:
+        return JsonResponse({'success': False, 'error': result['error']}, status=400)
 
-    total_questions = game.quiz.questions.count()
+    services.broadcast_to_room(game.code, result)
 
-    with transaction.atomic():
-        if game.current_question < total_questions:
-            game.current_question += 1
-            game.question_started_at = timezone.now()
-            game.save(update_fields=['current_question', 'question_started_at'])
-            return JsonResponse({
-                'success': True,
-                'action': 'NEXT_QUESTION',
-                'current_question': game.current_question,
-                'redirect_url': f"/games/host-play/{game.code}/"
-            })
-        else:
-            game.status = Game.Status.FINISHED
-            game.finished_at = timezone.now()
-            game.save(update_fields=['status', 'finished_at'])
-            return JsonResponse({
-                'success': True,
-                'action': 'GAME_FINISHED',
-                'redirect_url': f"/games/leaderboard/{game.code}/"
-            })
+    if result['event'] == 'next_question':
+        return JsonResponse({
+            'success': True,
+            'action': 'NEXT_QUESTION',
+            'current_question': result['current_question'],
+            'current_number': result['current_number'],
+            'redirect_url': f"/games/host-play/{game.code}/"
+        })
+    return JsonResponse({
+        'success': True,
+        'action': 'GAME_FINISHED',
+        'redirect_url': f"/games/leaderboard/{game.code}/"
+    })
 
 
 @login_required
@@ -267,16 +249,42 @@ def host_finish_game(request, code):
     """Finaliza manualmente la partida en cualquier momento."""
     game = get_object_or_404(Game, code=code)
 
-    if game.host != request.user:
+    if not identity.is_host(game, request.user):
         raise PermissionDenied("Solo el anfitrión puede finalizar la partida.")
 
-    with transaction.atomic():
-        game.status = Game.Status.FINISHED
-        game.finished_at = timezone.now()
-        game.save(update_fields=['status', 'finished_at'])
+    # Una partida ya cerrada no se vuelve a finalizar: se conserva su fecha original de cierre
+    if game.status == Game.Status.FINISHED:
+        messages.info(request, "La partida ya estaba finalizada.")
+        return redirect('quiz_games:game_leaderboard', code=game.code)
+    if game.status == Game.Status.CANCELLED:
+        messages.info(request, "La partida fue cancelada y no puede finalizarse.")
+        return redirect('quizzes:quiz_detail', pk=game.quiz_id)
+
+    result = services.finish_game(game)
+    if result['success']:
+        services.broadcast_to_room(game.code, result)
 
     messages.info(request, "Partida finalizada por el anfitrión.")
     return redirect('quiz_games:game_leaderboard', code=game.code)
+
+
+@login_required
+@require_POST
+def host_cancel_game(request, code):
+    """Cancela una sala en espera (LOBBY -> CANCELLED) y avisa a los alumnos."""
+    game = get_object_or_404(Game, code=code)
+
+    if not identity.is_host(game, request.user):
+        raise PermissionDenied("Solo el anfitrión puede cancelar la sala.")
+
+    result = services.cancel_game(game)
+    if not result['success']:
+        messages.warning(request, result['error'])
+        return redirect('quiz_games:game_host_lobby', code=game.code)
+
+    services.broadcast_to_room(game.code, result)
+    messages.info(request, "Sala cancelada. Los estudiantes han sido avisados.")
+    return redirect('quizzes:quiz_detail', pk=game.quiz_id)
 
 
 @login_required
@@ -287,7 +295,7 @@ def game_host_play(request, code):
     """
     game = get_object_or_404(Game.objects.select_related('quiz', 'host'), code=code)
 
-    if game.host != request.user:
+    if not identity.is_host(game, request.user):
         raise PermissionDenied("Acceso exclusivo para el anfitrión de la sala.")
 
     if game.status != Game.Status.RUNNING:
@@ -298,7 +306,7 @@ def game_host_play(request, code):
 
     questions = list(game.quiz.questions.prefetch_related('answers').order_by('order'))
     total_questions = len(questions)
-    current_idx = game.current_question - 1
+    current_idx = game.current_question
 
     if current_idx < 0 or current_idx >= total_questions:
         messages.error(request, "Índice de pregunta fuera de rango.")
@@ -310,14 +318,14 @@ def game_host_play(request, code):
         game_player__game=game,
         question=current_question
     ).count()
-    top_players = game.players.select_related('player').order_by('-score', '-correct_answers', 'joined_at')[:5]
+    top_players = ranked_players(game)[:5]
 
     context = {
         'game': game,
         'quiz': game.quiz,
         'question': current_question,
         'answers': current_question.answers.order_by('order'),
-        'current_num': game.current_question,
+        'current_num': game.current_question + 1,
         'total_questions': total_questions,
         'total_players': total_players,
         'answered_count': answered_count,
@@ -346,7 +354,7 @@ def game_player_play(request, code):
         return redirect('quiz_games:game_join')
 
     questions = list(game.quiz.questions.order_by('order'))
-    current_idx = game.current_question - 1
+    current_idx = game.current_question
 
     if current_idx < 0 or current_idx >= len(questions):
         return redirect('quiz_games:game_player_lobby', code=game.code)
@@ -363,9 +371,9 @@ def game_player_play(request, code):
     raw_answers = current_question.answers.all().order_by('?')
     answers_data = [{'id': a.id, 'text': a.text} for a in raw_answers]
 
-    ranked_players = list(game.players.select_related('player').order_by('-score', '-correct_answers', 'joined_at'))
+    ranking = list(ranked_players(game))
     player_position = None
-    for idx, p in enumerate(ranked_players, 1):
+    for idx, p in enumerate(ranking, 1):
         if p.id == player_entry.id:
             player_position = idx
             break
@@ -377,9 +385,9 @@ def game_player_play(request, code):
         'answers': answers_data,
         'has_answered': existing_answer is not None,
         'existing_answer': existing_answer,
-        'current_num': game.current_question,
+        'current_num': game.current_question + 1,
         'total_questions': len(questions),
-        'players': ranked_players,
+        'players': ranking,
         'player_position': player_position,
     }
     return render(request, 'quiz_games/game_player_play.html', context)
@@ -395,9 +403,6 @@ def submit_player_answer(request, code):
     """
     game = get_object_or_404(Game, code=code)
 
-    if game.status != Game.Status.RUNNING:
-        return JsonResponse({'success': False, 'error': 'La partida no está en curso.'}, status=400)
-
     try:
         data = json.loads(request.body) if request.content_type == 'application/json' else request.POST
         question_id = int(data.get('question_id'))
@@ -405,102 +410,46 @@ def submit_player_answer(request, code):
     except (ValueError, TypeError):
         return JsonResponse({'success': False, 'error': 'Parámetros inválidos.'}, status=400)
 
-    with transaction.atomic():
-        player_entry = GamePlayer.objects.select_for_update().filter(game=game, player=request.user).first()
-        if not player_entry:
-            return JsonResponse({'success': False, 'error': 'Participante no registrado en la sala.'}, status=403)
+    result = services.submit_answer(game, request.user, question_id, selected_answer_id)
 
-        question = get_object_or_404(Question, pk=question_id, quiz=game.quiz)
-        selected_answer = get_object_or_404(Answer, pk=selected_answer_id, question=question)
-
-        # Verificar si ya existe respuesta previa para cumplir unique_answer_per_player_question
-        if PlayerAnswer.objects.filter(game_player=player_entry, question=question).exists():
-            return JsonResponse({'success': False, 'error': 'Ya has enviado tu respuesta para esta pregunta.'}, status=400)
-
-        # Anti-cheat: Cálculo del tiempo oficial en servidor ignorando time_taken del cliente
-        now = timezone.now()
-        start = game.question_started_at or game.started_at or now
-        server_time_taken = max(0.1, (now - start).total_seconds())
-        time_limit = float(question.time_limit)
-        effective_time = min(server_time_taken, time_limit)
-
-        # Evaluación server-side
-        is_correct = selected_answer.is_correct
-        points_awarded = 0
-
-        if is_correct:
-            player_entry.current_streak += 1
-            player_entry.correct_answers += 1
-
-            puntos_base = float(question.points)
-            factor_tiempo = max(0.5, 1.0 - (effective_time / time_limit)) if time_limit > 0 else 0.5
-            bono_racha = min(500, max(0, (player_entry.current_streak - 1) * 100))
-            points_awarded = int((puntos_base * factor_tiempo) + bono_racha)
-            player_entry.score += points_awarded
-        else:
-            player_entry.current_streak = 0
-
-        player_entry.save(update_fields=['score', 'correct_answers', 'current_streak'])
-
-        # Registro atómico en PlayerAnswer
-        PlayerAnswer.objects.create(
-            game_player=player_entry,
-            question=question,
-            selected_answer=selected_answer,
-            is_correct=is_correct,
-            points_awarded=points_awarded,
-            answered_at=now
-        )
+    if result.get('code') == 'already_answered':
+        return JsonResponse({'success': False, 'error': 'Ya has enviado tu respuesta para esta pregunta.'}, status=400)
+    if 'error' in result:
+        status = 403 if result['code'] == 'not_participant' else 400
+        return JsonResponse({'success': False, 'error': result['error']}, status=status)
 
     return JsonResponse({
         'success': True,
-        'is_correct': is_correct,
-        'points_awarded': points_awarded,
-        'total_score': player_entry.score,
-        'streak': player_entry.current_streak,
+        'is_correct': result['is_correct'],
+        'points_awarded': result['points_awarded'],
+        'total_score': result['total_score'],
+        'streak': result['streak'],
     })
 
 
 @login_required
 def game_leaderboard(request, code):
     """
-    Pantalla 1 de Cierre: Tabla de Posiciones Completa y Liquidación de Saldo.
-    Transfiere atómicamente los DuckyCoins ganados a profile.ducky_coins.
+    Pantalla 1 de Cierre: Tabla de Posiciones Completa (solo lectura).
+    Muestra los puntos de la partida; no entrega monedas ni XP.
     """
     game = get_object_or_404(Game.objects.select_related('quiz', 'host'), code=code)
 
     if game.status != Game.Status.FINISHED:
-        if game.host == request.user:
+        if identity.is_host(game, request.user):
             return redirect('quiz_games:game_host_play', code=game.code)
         return redirect('quiz_games:game_player_play', code=game.code)
 
-    is_host = (game.host == request.user)
+    is_host = (identity.is_host(game, request.user))
     is_participant = game.players.filter(player=request.user).exists()
     if not (is_host or is_participant):
         raise PermissionDenied("No tienes autorización para ver los resultados de esta sala.")
 
-    # Liquidación transaccional en Profile (idempotente mediante is_settled)
-    with transaction.atomic():
-        players_to_settle = game.players.select_for_update().select_related('player')
-        for gp in players_to_settle:
-            if not gp.is_settled and gp.score > 0 and hasattr(gp.player, 'profile'):
-                profile = gp.player.profile
-                if hasattr(profile, 'ducky_coins'):
-                    profile.ducky_coins += gp.score
-                if hasattr(profile, 'xp'):
-                    profile.xp += gp.score
-                if callable(getattr(profile, 'save', None)):
-                    try:
-                        profile.save(update_fields=['ducky_coins', 'xp'])
-                    except Exception:
-                        profile.save()
-                gp.is_settled = True
-                gp.save(update_fields=['is_settled'])
-            elif not gp.is_settled:
-                gp.is_settled = True
-                gp.save(update_fields=['is_settled'])
-
-    ranking = list(game.players.select_related('player').order_by('-score', '-correct_answers', 'joined_at'))
+    # Esta pantalla es de SOLO LECTURA: no escribe nada en la base de datos.
+    # Los premios (XP / Duki Coins) los decide Ecomotor, no este módulo.
+    ranking = list(ranked_players(game))
+    for gp in ranking:
+        gp.best_streak = services.best_streak(gp)
 
     first_place = ranking[0] if len(ranking) > 0 else None
     second_place = ranking[1] if len(ranking) > 1 else None
@@ -540,12 +489,12 @@ def game_podium(request, code):
     if game.status != Game.Status.FINISHED:
         return redirect('quiz_games:game_leaderboard', code=game.code)
 
-    is_host = (game.host == request.user)
+    is_host = (identity.is_host(game, request.user))
     is_participant = game.players.filter(player=request.user).exists()
     if not (is_host or is_participant):
         raise PermissionDenied("No tienes autorización para ver el podio de esta sala.")
 
-    ranking = list(game.players.select_related('player').order_by('-score', '-correct_answers', 'joined_at'))
+    ranking = list(ranked_players(game))
 
     first_place = ranking[0] if len(ranking) > 0 else None
     second_place = ranking[1] if len(ranking) > 1 else None
@@ -578,7 +527,7 @@ def game_player_results(request, code):
         return redirect('quiz_games:game_join')
 
     # Determinar posición en el ranking general
-    ranked_ids = list(game.players.order_by('-score', '-correct_answers', 'joined_at').values_list('id', flat=True))
+    ranked_ids = [p.id for p in ranked_players(game)]
     position = (ranked_ids.index(player_entry.id) + 1) if player_entry.id in ranked_ids else None
     total_players = len(ranked_ids)
 
@@ -607,6 +556,8 @@ def game_player_results(request, code):
         'total_questions': total_questions,
         'accuracy': accuracy,
         'medal': medal,
+        'best_streak': services.best_streak(player_entry),
+        'incorrect_answers': max(total_questions - player_entry.correct_answers, 0),
     }
     return render(request, 'quiz_games/game_player_results.html', context)
 
@@ -615,8 +566,12 @@ def game_player_results(request, code):
 def game_question_status(request, code):
     """API JSON para actualizar en vivo el contador de respuestas recibidas con soporte 304 ETag."""
     game = get_object_or_404(Game, code=code)
+    is_host = (identity.is_host(game, request.user))
+    if not (is_host or game.players.filter(player=request.user).exists()):
+        return HttpResponseForbidden("No perteneces a esta partida.")
+
     questions = list(game.quiz.questions.order_by('order'))
-    current_idx = game.current_question - 1
+    current_idx = game.current_question
 
     answered_count = 0
     if 0 <= current_idx < len(questions):
@@ -650,11 +605,11 @@ def game_question_breakdown(request, code):
     Accesible únicamente para el anfitrión de la partida.
     """
     game = get_object_or_404(Game, code=code)
-    if game.host != request.user:
+    if not identity.is_host(game, request.user):
         raise PermissionDenied("Solo el anfitrión puede consultar el desglose de respuestas.")
 
     questions = list(game.quiz.questions.prefetch_related('answers').order_by('order'))
-    current_idx = game.current_question - 1
+    current_idx = game.current_question
 
     if current_idx < 0 or current_idx >= len(questions):
         return JsonResponse({'success': False, 'error': 'Pregunta fuera de rango.'}, status=400)
@@ -694,7 +649,7 @@ def export_game_results_csv(request, code):
     de todos los participantes de una partida concluida.
     """
     game = get_object_or_404(Game.objects.select_related('quiz'), code=code)
-    if game.host != request.user:
+    if not identity.is_host(game, request.user):
         raise PermissionDenied("Solo el anfitrión puede exportar las calificaciones de esta sala.")
 
     response = HttpResponse(content_type='text/csv; charset=utf-8')
@@ -706,7 +661,7 @@ def export_game_results_csv(request, code):
     writer = csv.writer(response)
     writer.writerow(['Posición', 'Usuario', 'Nombre Completo', 'Puntos Totales', 'Respuestas Correctas', 'Total Preguntas', 'Precisión (%)', 'Racha Final'])
 
-    ranking = game.players.select_related('player').order_by('-score', '-correct_answers', 'joined_at')
+    ranking = ranked_players(game)
     total_q = game.quiz.questions.count()
 
     for pos, player_entry in enumerate(ranking, start=1):
@@ -736,7 +691,7 @@ def game_join(request):
         if form.is_valid():
             game = form.cleaned_data['game']
 
-            if game.host == request.user:
+            if identity.is_host(game, request.user):
                 messages.info(request, "Eres el anfitrión de esta sala. Te hemos redirigido a tu panel de control.")
                 return redirect('quiz_games:game_host_lobby', code=game.code)
 
@@ -770,7 +725,10 @@ def game_player_lobby(request, code):
 
     if game.status == Game.Status.RUNNING:
         return redirect('quiz_games:game_player_play', code=game.code)
-    elif game.status in [Game.Status.FINISHED, Game.Status.CANCELLED]:
+    elif game.status == Game.Status.CANCELLED:
+        messages.warning(request, "El docente canceló la sala.")
+        return redirect('quiz_games:game_join')
+    elif game.status == Game.Status.FINISHED:
         messages.warning(request, "La partida ya no se encuentra activa.")
         return redirect('quiz_games:game_join')
 

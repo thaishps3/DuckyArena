@@ -40,7 +40,7 @@
             {{ quiz.title }}
         </h1>
         <p style="font-size: 1.1rem; color: var(--text-muted); margin-bottom: 2rem;">
-            Pregunta actual: <strong>{{ game.current_question }}</strong> &bull; Código PIN: <strong>{{ game.code }}</strong>
+            Pregunta actual: <strong>{{ game.current_question|add:1 }}</strong> &bull; Código PIN: <strong>{{ game.code }}</strong>
         </p>
         <div>
             <a href="{% url 'quizzes:quiz_detail' quiz.pk %}" class="btn-3d btn-3d-neutral">

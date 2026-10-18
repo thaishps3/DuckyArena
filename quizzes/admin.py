@@ -14,7 +14,7 @@ class QuestionInline(admin.TabularInline):
     model = Question
     extra = 1
     show_change_link = True
-    fields = ('text', 'time_limit', 'points', 'order')
+    fields = ('text', 'time_limit', 'points', 'difficulty', 'order')
     ordering = ('order',)
 
 
@@ -38,8 +38,8 @@ class QuizAdmin(admin.ModelAdmin):
 
 @admin.register(Question)
 class QuestionAdmin(admin.ModelAdmin):
-    list_display = ('text', 'quiz', 'time_limit', 'points', 'order')
-    list_filter = ('quiz', 'time_limit')
+    list_display = ('text', 'quiz', 'time_limit', 'points', 'difficulty', 'order')
+    list_filter = ('quiz', 'time_limit', 'difficulty')
     search_fields = ('text', 'quiz__title')
     list_select_related = ('quiz',)
     inlines = [AnswerInline]

@@ -416,7 +416,7 @@
             <div class="stat-number">
                 {% with total_sec=quiz.total_time|default:0 %}
                     {% if total_sec >= 60 %}
-                        {{ total_sec|divisibleby:60 }} min
+                        {{ estimated_minutes }} min
                     {% else %}
                         {{ total_sec }} s
                     {% endif %}
@@ -475,7 +475,13 @@
             Estructura de Preguntas ({{ quiz.questions.count }})
         </h2>
 
-        {% if quiz.questions.all %}
+        {% if quiz.questions.all and not can_view_questions %}
+            {# Los alumnos no ven preguntas ni opciones antes de jugar: se descubren en la partida #}
+            <div class="empty-questions-notice">
+                <p style="font-size: 1.05rem; font-weight: 700; color: var(--text-heading);">Las preguntas se revelan durante la partida.</p>
+                <p style="margin-top: 0.5rem;">Pide el PIN a tu docente para unirte.</p>
+            </div>
+        {% elif quiz.questions.all %}
             <div class="question-items-stack">
                 {% for question in quiz.questions.all %}
                     <div class="question-card-preview">
@@ -484,6 +490,7 @@
                             <div class="q-badge-meta">
                                 <span class="q-badge">{{ question.time_limit }}s</span>
                                 <span class="q-badge q-badge-points">{{ question.points }} pts</span>
+                                <span class="q-badge">{{ question.get_difficulty_display }}</span>
                             </div>
                         </div>
 
